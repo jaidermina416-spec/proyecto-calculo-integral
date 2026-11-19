@@ -1090,11 +1090,11 @@ function aImagen(ev) {
 const aPantalla = p => ({ x: vista.ox + p.x * vista.s, y: vista.oy + p.y * vista.s });
 // Desplazamiento acumulado de la imagen por el movimiento de la cámara (px de video), interpolado en el tiempo
 function camAt(t) {
-  const c = tiro.cam; if (!c || !c.length) return { x: 0, y: 0 };
-  if (t <= c[0].t) return c[0]; if (t >= c[c.length - 1].t) return c[c.length - 1];
+  const c = tiro.cam; if (!c || !c.length) return { x: 0, y: 0, z: 1 };
+  if (t <= c[0].t) return { x: c[0].x, y: c[0].y, z: c[0].z || 1 }; if (t >= c[c.length - 1].t) { const u = c[c.length - 1]; return { x: u.x, y: u.y, z: u.z || 1 }; }
   let i = 1; while (c[i].t < t) i++;
-  const a = c[i - 1], b = c[i], f = (t - a.t) / ((b.t - a.t) || 1);
-  return { x: a.x + (b.x - a.x) * f, y: a.y + (b.y - a.y) * f };
+  const a = c[i - 1], b = c[i], f = (t - a.t) / ((b.t - a.t) || 1), za = a.z || 1, zb = b.z || 1;
+  return { x: a.x + (b.x - a.x) * f, y: a.y + (b.y - a.y) * f, z: za + (zb - za) * f };
 }
 // El análisis usa un segundo video oculto: así el video que se ve nunca salta ni se congela
 const fuente = () => tiro.vAna && tiro.vAna._listo ? tiro.vAna : tiro.video;
@@ -1116,9 +1116,11 @@ async function videoAnalisis() {
   await a._prep;
   return a;
 }
-const camAhora = () => tiro.video && modo === "tiro" ? camAt(tiempoVista()) : { x: 0, y: 0 };
-const mundoAImagen = p => { const c = camAhora(); return { x: p.x + c.x, y: p.y + c.y }; };
-const imagenAMundo = p => { const c = camAhora(); return { x: p.x - c.x, y: p.y - c.y }; };
+const camAhora = () => tiro.video && modo === "tiro" ? camAt(tiempoVista()) : { x: 0, y: 0, z: 1 };
+// Mundo = imagen del primer cuadro analizado. La cámara (paneo + zoom) lleva el mundo a la imagen: imagen = z·mundo + (x, y)
+const mundoAImagen = p => { const c = camAhora(); return { x: c.z * p.x + c.x, y: c.z * p.y + c.y }; };
+const imagenAMundo = p => { const c = camAhora(); return { x: (p.x - c.x) / c.z, y: (p.y - c.y) / c.z }; };
+const aMundoCam = (p, C) => ({ x: (p.x - C.x) / C.z, y: (p.y - C.y) / C.z });
 
 const necesitaSuelo = () => !REFS[tiro.refTipo].sueloAuto;
 const metodoEfectivo = () => tiro.metodo === "auto" ? (tiro.puntos.filter(q => !q.fuera).length >= 3 ? "minimos" : "fisica") : tiro.metodo;
@@ -1818,7 +1820,9 @@ function recorte(G, cx, cy, R) {
 // de búsqueda (no en todo el cuadro) y el mínimo se afina a subpíxel con una parábola sobre los vecinos.
 function buscar(G, S, primero, amplio) {
   const R = S.R, n = (2 * R + 1) ** 2, pr = S.pred || S.pos, rap = Math.hypot(pr.x - S.pos.x, pr.y - S.pos.y);
-  const sw = Math.round(primero || amplio ? Math.max(7 * R, 28) + 1.5 * rap : 4 * R + rap + 6);
+  // el balón rápido avanza una fracción del cuadro entre dos cuadros: la ventana no puede depender solo del radio (un balón pequeño
+  // en un cuadro grande se pierde). Tras cuadros fallidos la ventana crece con el tiempo sin ver el balón.
+  const sw = Math.round((primero || amplio ? Math.max(7 * R, 28, 0.05 * G.w) + 1.5 * rap : 4 * R + rap + 6) + (S.fallos || 0) * Math.max(2 * R, 12));
   const px = Math.round(pr.x), py = Math.round(pr.y);
   const xa = Math.max(R, px - sw), xb = Math.min(G.w - 1 - R, px + sw), ya = Math.max(R, py - sw), yb = Math.min(G.h - 1 - R, py + sw);
   if (xa > xb || ya > yb) return { x: px, y: py, xi: px, yi: py, score: Infinity, borde: true };
@@ -1841,10 +1845,11 @@ function buscar(G, S, primero, amplio) {
 }
 // Afina el centro con el centroide del brillo: el balón es la mancha clara, así la plantilla no "resbala" del centro
 function refinarCentro(G, res, R) {
-  let pico = 0, anillo = 0, na = 0;
-  for (let dy = -R; dy <= R; dy++) for (let dx = -R; dx <= R; dx++) { const x = res.xi + dx, y = res.yi + dy; if (x < 0 || y < 0 || x >= G.w || y >= G.h) continue; const val = G.a[y * G.w + x]; if (Math.hypot(dx, dy) <= Math.max(1.5, R * 0.6)) pico = Math.max(pico, val); else { anillo += val; na++; } }
-  const fondo = na ? anillo / na : 0; res.contraste = pico - fondo;
-  if (res.contraste < 20) return res;
+  let pico = 0, valle = 255, anillo = 0, na = 0;
+  for (let dy = -R; dy <= R; dy++) for (let dx = -R; dx <= R; dx++) { const x = res.xi + dx, y = res.yi + dy; if (x < 0 || y < 0 || x >= G.w || y >= G.h) continue; const val = G.a[y * G.w + x]; if (Math.hypot(dx, dy) <= Math.max(1.5, R * 0.6)) { pico = Math.max(pico, val); valle = Math.min(valle, val); } else { anillo += val; na++; } }
+  // el balón puede ser más claro (lo habitual) o más oscuro que su entorno: el contraste se mide en valor absoluto
+  const fondo = na ? anillo / na : 0, claro = pico - fondo, oscuro = fondo - valle; res.contraste = Math.max(claro, oscuro);
+  if (res.contraste < 20 || oscuro > claro) return res;
   const thr = fondo + 0.5 * res.contraste, Rr = R + 1; let sw = 0, sx = 0, sy = 0;
   for (let dy = -Rr; dy <= Rr; dy++) for (let dx = -Rr; dx <= Rr; dx++) { if (dx * dx + dy * dy > Rr * Rr) continue; const x = res.xi + dx, y = res.yi + dy; if (x < 0 || y < 0 || x >= G.w || y >= G.h) continue; const val = G.a[y * G.w + x]; if (val > thr) { const w = val - thr; sw += w; sx += w * x; sy += w * y; } }
   if (sw > 0) { const cx = sx / sw, cy = sy / sw; if (Math.hypot(cx - res.x, cy - res.y) <= 0.75 * R + 0.5) { res.x = cx; res.y = cy; } }
@@ -1858,10 +1863,17 @@ function seekA(v, t) {
     v.currentTime = t;
   });
 }
+// Umbral de coincidencia relativo al contraste de la plantilla: un balón pequeño (o muy contrastado) que cae entre píxeles
+// da un error de borde grande aunque sea el balón; con un balón de poco contraste se mantiene el mínimo de siempre.
+function fijarUmbral(S) {
+  let m = 0; for (let i = 0; i < S.tpl.length; i++) m += S.tpl[i]; m /= S.tpl.length;
+  let v = 0; for (let i = 0; i < S.tpl.length; i++) v += (S.tpl[i] - m) ** 2; v /= S.tpl.length;
+  S.umbral = Math.min(6000, Math.max(1600, 0.4 * v));
+}
 function prepararSeg() {
-  const S = tiro.seg, rv = radioBalonVideo();
+  const S = tiro.seg, rv = radioBalonVideo() * ((S.C && S.C.z) || 1);
   S.k = Math.min(1, 8 / rv);
-  S.R = Math.max(3, Math.round(rv * S.k));
+  S.R = Math.max(3, Math.min(14, Math.round(rv * S.k)));
 }
 function iniciarSeg() {
   if (!tiro.video) return;
@@ -1873,29 +1885,40 @@ function iniciarSeg() {
   fase = "semilla"; recalcular();
 }
 // Pinta como mucho una vez por cuadro de pantalla: el análisis no espera al dibujo (clave en equipos lentos)
-let pintarPend = false;
-function pintarPronto() { if (pintarPend) return; pintarPend = true; requestAnimationFrame(() => { pintarPend = false; if (modo === "tiro") { dibujar(); uiVideo(); } }); }
+let pintarPend = false, panelUlt = 0, panelFirma = "";
+function pintarPronto() {
+  if (pintarPend) return; pintarPend = true;
+  requestAnimationFrame(() => {
+    pintarPend = false;
+    if (modo !== "tiro") return;
+    dibujar();
+    // los resultados se rehacen mientras se analiza (antes quedaban en «Todavía no hay resultado» hasta el final)
+    const ahora = performance.now(), firma = `${tiro.puntos.length}|${tiro.res ? 1 : 0}`;
+    if (tiro.seg.activo && ahora - panelUlt > 1500 && firma !== panelFirma) { panelUlt = ahora; panelFirma = firma; renderTiro(true); } else uiVideo();
+  });
+}
 function sembrar(p) {
   const S = tiro.seg, v = fuente();
   if (!tiro.puntos.some(q => q.auto)) tiro.eventos = [];
   S.hist = []; S.mov = null; S.nQ = 0; S.nM = 0; S.disparado = false; S.ultEstado = null; S.zoomAcc = 0; S.altMax = 0;
+  if (tiro.modoSeg === "auto" && !tiro.cam.length) tiro.cam.push({ t: v.currentTime, x: 0, y: 0, z: 1 });
+  S.C = camAt(v.currentTime);
   prepararSeg();
   const G = grisCuadro(S);
   S.pos = { x: p.x * S.k, y: p.y * S.k };
-  S.tpl = recorte(G, S.pos.x, S.pos.y, S.R);
-  if (tiro.modoSeg === "auto" && !tiro.cam.length) tiro.cam.push({ t: v.currentTime, x: 0, y: 0 });
-  S.C = camAt(v.currentTime); S.camPrev = G; S.camPred = null;
+  S.tpl = recorte(G, S.pos.x, S.pos.y, S.R); fijarUmbral(S);
+  S.camPrev = G; S.camPred = null;
   S.vel = { x: 0, y: 0 }; S.tPrev = v.currentTime; S.primero = true; S.fallos = 0; S.pred = null; S.yMax = 0; S.quieto = 0; S.msg = ""; S.prevG = G; S.repetidos = 0; S.ultimoLog = 0;
   S.perdido = 0; S.corte = false; S.post = false; S.iguales = 0; S.seguidos = 0; S.sigSeek = null;
-  if (!tiro.puntos.some(q => q.t != null && Math.abs(q.t - v.currentTime) < 1e-4)) tiro.puntos.push({ x: p.x - S.C.x, y: p.y - S.C.y, t: v.currentTime, auto: true });
+  if (!tiro.puntos.some(q => q.t != null && Math.abs(q.t - v.currentTime) < 1e-4)) tiro.puntos.push({ ...aMundoCam(p, S.C), t: v.currentTime, auto: true });
   S.activo = true; fase = "siguiendo"; tiro.det = null; tiro.propuestas = [];
-  S.enReposo = tiro.modoSeg === "auto" && tiro.puntos.length <= 1; S.lejos = 0; S.mov = S.enReposo ? "quieto" : null; S.disparado = !S.enReposo; S.origen = tiro.puntos.length ? { ...tiro.puntos[tiro.puntos.length - 1] } : { x: p.x - S.C.x, y: p.y - S.C.y };
+  S.enReposo = tiro.modoSeg === "auto" && tiro.puntos.length <= 1; S.lejos = 0; S.mov = S.enReposo ? "quieto" : null; S.disparado = !S.enReposo; S.origen = tiro.puntos.length ? { ...tiro.puntos[tiro.puntos.length - 1] } : aMundoCam(p, S.C);
   // balón encontrado en pleno vuelo: se suman las dos posiciones anteriores y se arranca con su velocidad
   const sv = S.semillaVuelo; S.semillaVuelo = null;
   if (sv && tiro.modoSeg === "auto") {
-    sv.previos.forEach(q => tiro.cam.push({ t: q.t, x: q.cam.x, y: q.cam.y }));
+    sv.previos.forEach(q => tiro.cam.push({ t: q.t, x: q.cam.x, y: q.cam.y, z: 1 }));
     tiro.cam.sort((a, b) => a.t - b.t);
-    tiro.puntos.unshift(...sv.previos.map(q => ({ x: q.p.x - S.C.x, y: q.p.y - S.C.y, t: q.t, auto: true, estado: "avanza" })));
+    tiro.puntos.unshift(...sv.previos.map(q => ({ ...aMundoCam(q.p, S.C), t: q.t, auto: true, estado: "avanza" })));
     S.mov = "mov"; S.disparado = true;
     evento("envuelo", v.currentTime, tiro.puntos[0], "el análisis empezó con el balón ya en el aire; se suman sus 2 posiciones anteriores");
     S.vel = { x: sv.vel.x * S.k, y: sv.vel.y * S.k }; S.primero = false; S.enReposo = false;
@@ -1920,7 +1943,7 @@ function iniciarLectura() {
 }
 function lecturaPlay(v) {
   const S = tiro.seg, gen = S.gen;
-  S.lectura = "play"; S.ultimoMT = v.currentTime; S.ultimoCb = performance.now(); S.cbN = 0;
+  S.lectura = "play"; S.ultimoMT = v.currentTime; S.ultimoCb = performance.now(); S.cbN = 0; S.vistoSaltos = 0;
   v.playbackRate = S.rateAna || 0.5;
   log("seg", "Lectura por reproducción", `el video oculto avanza a ${f2(v.playbackRate, 2)}× y la velocidad se ajusta sola a lo que alcanza a procesar este equipo`);
   const salir = motivo => {
@@ -1936,7 +1959,12 @@ function lecturaPlay(v) {
     S.ultimoCb = performance.now();
     const t = meta.mediaTime;
     if (t > S.ultimoMT + 1e-4) {
-      if (S.cbN && t - S.ultimoMT > 1.6 / tiro.fps) S.saltados += Math.round((t - S.ultimoMT) * tiro.fps) - 1;
+      // el navegador se saltó cuadros (equipo lento o video con cuadros omitidos): el balón se mueve mucho entre dos cuadros lejanos
+      // y se pierde. Se pasa a la lectura cuadro a cuadro desde el último cuadro analizado, que no omite ninguno.
+      if (S.cbN && t - S.ultimoMT > 1.6 / tiro.fps && !S.corte) {
+        const n = Math.round((t - S.ultimoMT) * tiro.fps) - 1; S.saltados += n;
+        if (n >= 1 && (S.vistoSaltos = (S.vistoSaltos || 0) + 1) >= 2) return salir(`la reproducción se saltó ${n} cuadro${n === 1 ? "" : "s"}; se sigue cuadro por cuadro para no perder el balón`);
+      }
       S.ultimoMT = t; S.cbN++;
       const a0 = performance.now();
       const est = procesarCuadro(t, grisCuadro(S));
@@ -2002,13 +2030,16 @@ function procesarCuadro(t, G0) {
     S.camPred = { x: cam.dx, y: cam.dy, c: cam.cg };
     S.camFrame = Math.hypot(cam.dx, cam.dy) / S.k;
     camMovio = S.camFrame > 0.05;
-    if (cam.zoom) { S.zoomAcc = (S.zoomAcc || 0) + cam.zoom; if (Math.abs(S.zoomAcc) > 0.04) { evento("zoom", t, null, `la cámara ${S.zoomAcc > 0 ? "acerca" : "aleja"} la imagen ≈ ${f2(Math.abs(S.zoomAcc) * 100, 1)} %: la escala cambia un poco`); S.zoomAcc = 0; } }
-    if (camMovio) {
-      S.pos = { x: S.pos.x + cam.dx, y: S.pos.y + cam.dy };
-      S.C = { x: S.C.x + cam.dx / S.k, y: S.C.y + cam.dy / S.k };
+    if (cam.zoom) { S.zoomAcc = (S.zoomAcc || 0) + cam.zoom; if (Math.abs(S.zoomAcc) > 0.04) { evento("zoom", t, null, `la cámara ${S.zoomAcc > 0 ? "acerca" : "aleja"} la imagen ≈ ${f2(Math.abs(S.zoomAcc) * 100, 1)} %: se compensa el cambio de escala`); S.zoomAcc = 0; } }
+    if (camMovio || cam.zoom) {
+      // p' = c + (1+s)(p − c) + d  (c, d en px del cuadro reducido): el mundo se mueve y cambia de escala con la cámara
+      const s1 = 1 + cam.zoom, c = cam.c || { x: 0, y: 0 }, kk = S.k;
+      S.pos = { x: c.x + s1 * (S.pos.x - c.x) + cam.dx, y: c.y + s1 * (S.pos.y - c.y) + cam.dy };
+      S.C = { x: c.x / kk + s1 * (S.C.x - c.x / kk) + cam.dx / kk, y: c.y / kk + s1 * (S.C.y - c.y / kk) + cam.dy / kk, z: S.C.z * s1 };
+      S.vel = { x: S.vel.x * s1, y: S.vel.y * s1 };
       S.camMov = (S.camMov || 0) + Math.hypot(cam.dx, cam.dy) / S.k;
     }
-    tiro.cam.push({ t, x: S.C.x, y: S.C.y });
+    tiro.cam.push({ t, x: S.C.x, y: S.C.y, z: S.C.z });
   }
   S.camPrev = G;
   const dt = Math.max(t - S.tPrev, 1e-3);
@@ -2016,11 +2047,11 @@ function procesarCuadro(t, G0) {
   // en pleno vuelo la predicción usa también la parábola de los últimos cuadros (la gravedad curva la trayectoria)
   if (!S.enReposo && !S.post && !S.corte && S.mov !== "quieto") {
     const ex = extrapolar(t);
-    if (ex) { const ep = { x: (ex.x + S.C.x) * S.k, y: (ex.y + S.C.y) * S.k }; if (Math.hypot(ep.x - S.pred.x, ep.y - S.pred.y) < 3 * S.R + 2) S.pred = { x: (ep.x + S.pred.x) / 2, y: (ep.y + S.pred.y) / 2 }; }
+    if (ex) { const ep = { x: (S.C.z * ex.x + S.C.x) * S.k, y: (S.C.z * ex.y + S.C.y) * S.k }; if (Math.hypot(ep.x - S.pred.x, ep.y - S.pred.y) < 3 * S.R + 2) S.pred = { x: (ep.x + S.pred.x) / 2, y: (ep.y + S.pred.y) / 2 }; }
   }
   if (S.perdido) return reencontrar(G, t);
   // cuadro repetido: se compara solo la zona alrededor del balón (posición anterior y prevista)
-  if (S.prevG && S.prevG.a.length === G.a.length && (S.seguidos || 0) < 8) {
+  if (S.prevG && S.prevG.a.length === G.a.length && (S.seguidos || 0) < 8 && !S.fallos) {
     const m = 3 * S.R;
     const x0 = Math.max(0, Math.round(Math.min(S.pos.x, S.pred.x) - m)), x1 = Math.min(G.w, Math.round(Math.max(S.pos.x, S.pred.x) + m));
     const y0 = Math.max(0, Math.round(Math.min(S.pos.y, S.pred.y) - m)), y1 = Math.min(G.h, Math.round(Math.max(S.pos.y, S.pred.y) + m));
@@ -2057,8 +2088,10 @@ function procesarCuadro(t, G0) {
   S.vel = S.primero ? vNueva : { x: 0.6 * vNueva.x + 0.4 * S.vel.x, y: 0.6 * vNueva.y + 0.4 * S.vel.y };
   S.primero = false; S.fallos = 0;
   S.pos = { x: res.x, y: res.y }; S.tPrev = t;
-  if (res.score < S.umbral / 3) { const nuevo = recorte(G, res.x, res.y, S.R); for (let i = 0; i < S.tpl.length; i++) S.tpl[i] = 0.85 * S.tpl[i] + 0.15 * nuevo[i]; }
-  const pw = { x: res.x / S.k - S.C.x, y: res.y / S.k - S.C.y, t, auto: true };
+  // el balón cambia de tamaño con el zoom: si el radio esperado difiere más de un 15 %, la plantilla se rehace a la nueva medida
+  { const Rn = Math.max(3, Math.min(14, Math.round(radioBalonVideo() * S.C.z * S.k))); if (Rn !== S.R && Math.abs(Rn / S.R - 1) >= 0.15) { S.R = Rn; S.tpl = recorte(G, res.x, res.y, S.R); fijarUmbral(S); log("seg", "Plantilla reescalada", `el balón mide ≈ ${f2(2 * Rn / S.k, 1)} px por el zoom de la cámara`); } }
+  if (res.score < S.umbral / 3 && S.tpl.length === (2 * S.R + 1) ** 2) { const nuevo = recorte(G, res.x, res.y, S.R); for (let i = 0; i < S.tpl.length; i++) S.tpl[i] = 0.85 * S.tpl[i] + 0.15 * nuevo[i]; }
+  const pw = { ...aMundoCam({ x: res.x / S.k, y: res.y / S.k }, S.C), t, auto: true };
   if (S.post || S.corte) pw.fuera = true;
   // antes del disparo el balón está quieto: solo se actualiza el punto de salida, sin acumular puntos iguales
   if (S.enReposo) {
@@ -2121,9 +2154,9 @@ function reencontrar(G, t) {
   const S = tiro.seg, v = fuente();
   S.perdido++;
   hud(`<b>BUSCANDO EL BALÓN</b> · t = ${f2(t, 2)} s · ${tiro.puntos.filter(q => !q.fuera).length} posiciones · <b>Detener</b> cuando quieras`);
-  const fijos = v._overlays || [], rBal = radioBalonVideo();
+  const fijos = v._overlays || [], rBal = radioBalonVideo() * S.C.z;
   // centro de búsqueda: la trayectoria extrapolada con los últimos puntos del vuelo (o la última velocidad)
-  const ex = S.corte ? null : extrapolar(t), centro = ex ? { x: ex.x + S.C.x, y: ex.y + S.C.y } : { x: S.pred.x / S.k, y: S.pred.y / S.k };
+  const ex = S.corte ? null : extrapolar(t), centro = ex ? { x: S.C.z * ex.x + S.C.x, y: S.C.z * ex.y + S.C.y } : { x: S.pred.x / S.k, y: S.pred.y / S.k };
   const vpf = Math.hypot(S.vel.x, S.vel.y) / S.k / tiro.fps, rad = Math.min(Math.max(v.videoWidth, v.videoHeight) * 0.45, 4 * rBal + 30 + Math.max(12, 1.5 * vpf, 0.03 * v.videoWidth) * S.perdido);
   // se busca sobre el cuadro ya leído (S.cnv, a escala S.k): así el video oculto puede ir decodificando el siguiente
   const k = S.k, c = detectarBalon(S.cnv, null, true, S.corte ? { relajado: true } : { relajado: true, zona: { x: centro.x * k, y: centro.y * k, r: rad * k } })
@@ -2136,13 +2169,13 @@ function reencontrar(G, t) {
   if (!c) return "seguir";
   const nx = c.x * S.k, ny = c.y * S.k, gap = Math.max(t - S.tPrev, 1e-3);
   S.vel = S.perdido <= 6 && !S.corte ? { x: (nx - S.pos.x) / gap, y: (ny - S.pos.y) / gap } : { x: 0, y: 0 };
-  S.pos = { x: nx, y: ny }; S.tPrev = t; S.tpl = recorte(G, nx, ny, S.R); S.primero = true; S.fallos = 0; S.prevG = G;
+  S.pos = { x: nx, y: ny }; S.tPrev = t; S.tpl = recorte(G, nx, ny, S.R); fijarUmbral(S); S.primero = true; S.fallos = 0; S.prevG = G;
   // ¿encaja con el vuelo? si aparece lejos de la trayectoria prevista puede ser otro objeto: se sigue, pero fuera del ajuste
   const coherente = !ex || c.dist < Math.max(4 * rBal, 20 + 8 * (S.perdido - 1));
-  evento("recuperado", t, { x: c.x - S.C.x, y: c.y - S.C.y }, `tras ${S.perdido - 1} cuadro${S.perdido === 2 ? "" : "s"} sin verlo` + (ex ? ` · a ${Math.round(c.dist)} px de la trayectoria prevista` : ""));
+  evento("recuperado", t, aMundoCam(c, S.C), `tras ${S.perdido - 1} cuadro${S.perdido === 2 ? "" : "s"} sin verlo` + (ex ? ` · a ${Math.round(c.dist)} px de la trayectoria prevista` : ""));
   if (!coherente && !S.post) { S.post = true; log("aviso", "Lejos de la trayectoria", "puede ser otro objeto: desde aquí las posiciones se siguen mostrando pero no entran al ajuste"); }
   S.perdido = 0;
-  const pw = { x: c.x - S.C.x, y: c.y - S.C.y, t, auto: true };
+  const pw = { ...aMundoCam(c, S.C), t, auto: true };
   if (S.post || S.corte) pw.fuera = true;
   pw.recuperado = true; tiro.puntos.push(pw); S.cuadros++; S.hist = []; clasificar(pw, t, false); calcularTiro();
   return "seguir";
@@ -2221,10 +2254,13 @@ function estimarCamara(A, B, pred) {
   let fin = { c: costo(best.dx, best.dy, pf), dx: best.dx, dy: best.dy };
   for (let dy = best.dy - rf; dy <= best.dy + rf; dy++) for (let dx = best.dx - rf; dx <= best.dx + rf; dx++) { const c = costo(dx, dy, pf); if (c < fin.c) fin = { c, dx, dy }; }
   const quieto = costo(0, 0, pf);
-  if (quieto - fin.c < 0.25) return { dx: 0, dy: 0, dif: quieto, cg: c0, zoom: 0 };
+  // Sin traslación global la cámara puede estar quieta o solo haciendo zoom: el zoom puro no mejora el costo de una traslación,
+  // así que se sigue con el análisis por zonas (barato) antes de dar la cámara por fija.
+  const estatico = quieto - fin.c < 0.25;
+  if (estatico) fin = { c: quieto, dx: 0, dy: 0 };
   const subp = (l, c, r) => { const den = 2 * (Math.max(l, r) - c); return den > 1e-6 ? Math.max(-0.5, Math.min(0.5, (l - r) / den)) : 0; };
   const sx = subp(costo(fin.dx - 1, fin.dy, pf), fin.c, costo(fin.dx + 1, fin.dy, pf)), sy = subp(costo(fin.dx, fin.dy - 1, pf), fin.c, costo(fin.dx, fin.dy + 1, pf));
-  const glob = { dx: fin.dx + sx, dy: fin.dy + sy, dif: fin.c, cg: best.c, zoom: 0, zonas: 0 };
+  const glob = estatico ? { dx: 0, dy: 0, dif: quieto, cg: c0, zoom: 0, zonas: 0 } : { dx: fin.dx + sx, dy: fin.dy + sy, dif: fin.c, cg: best.c, zoom: 0, zonas: 0 };
   // Afinado por zonas: el fondo se divide en 3×3 y cada zona mide su propio desplazamiento. Las zonas con jugadores
   // o con el balón no siguen a la cámara y se descartan (mediana); las zonas lisas (cielo, césped uniforme) no informan.
   const nz = 3, tw = (w - 2 * mx) / nz, th = (h - 2 * my) / nz, zonas = [];
@@ -2248,8 +2284,9 @@ function estimarCamara(A, B, pred) {
   const tx = prom(z => z.dx), ty = prom(z => z.dy), ccx = prom(z => z.cx), ccy = prom(z => z.cy);
   // zoom por mínimos cuadrados: d = t + s·(p − c); s > 0 la cámara acerca, s < 0 aleja
   let num = 0, den = 0; buenas.forEach(z => { num += (z.cx - ccx) * (z.dx - tx) + (z.cy - ccy) * (z.dy - ty); den += (z.cx - ccx) ** 2 + (z.cy - ccy) ** 2; });
-  let zoom = buenas.length >= 4 && den > 0 ? num / den : 0; if (Math.abs(zoom) < 0.002) zoom = 0;
-  return { dx: tx, dy: ty, dif: fin.c, cg: best.c, zoom, zonas: buenas.length };
+  let zoom = buenas.length >= 4 && den > 0 ? num / den : 0; if (Math.abs(zoom) < 0.0007) zoom = 0;
+  if (estatico && !zoom) return glob;
+  return { dx: tx, dy: ty, dif: fin.c, cg: best.c, zoom, zonas: buenas.length, c: { x: ccx, y: ccy } };
 }
 function grisVideo(v) {
   const k = Math.min(1, 480 / v.videoWidth), w = Math.round(v.videoWidth * k), h = Math.round(v.videoHeight * k);
@@ -2381,7 +2418,7 @@ async function iniciarAuto() {
   arrancarAuto(det);
 }
 function arrancarAuto(det) {
-  tiro.cam = [{ t: fuente().currentTime, x: 0, y: 0 }];
+  tiro.cam = [{ t: fuente().currentTime, x: 0, y: 0, z: 1 }];
   if (tiro.calib.length < 2) {
     tiro.refTipo = "balon"; tiro.largo = 0.22; tiro.escalaAuto = true;
     tiro.calib = [{ x: det.x - det.r, y: det.y }, { x: det.x + det.r, y: det.y }];
@@ -2480,7 +2517,17 @@ function enVivo() {
   let At = 0; for (let i = 1; i < ps.length; i++) At += (ps[i].y + ps[i - 1].y) / 2 * (ps[i].x - ps[i - 1].x);
   const y = r.c[0] * x * x + r.c[1] * x + r.c[2];
   const vy = T.sy ? 2 * T.sy[0] * t + T.sy[1] : NaN;
-  return { t: ahora, x, y, A, At, n: ps.length, vx: Math.abs(T.sx[0]), vy, pct: r.area ? A / r.area * 100 : NaN };
+  return { t: ahora, x, y, A, At, n: ps.length, vx: Math.abs(T.sx[0]), vy, pct: r.area ? A / r.area * 100 : NaN, med: medidoEn(r, t), fuera: t < -1e-6 || T.sx[1] + T.sx[0] * t >= r.d };
+}
+// Medición directa (sin ajuste) en el instante t (s desde la primera posición): interpola las posiciones rastreadas, también
+// las de después del vuelo, y la rapidez sale de las dos posiciones vecinas. Así hay lectura en todo momento del video.
+function medidoEn(r, t) {
+  const L = (r.todos || []).filter(q => q.t != null); if (L.length < 2) return null;
+  if (t < L[0].t - 0.5 / tiro.fps || t > L[L.length - 1].t + 0.5 / tiro.fps) return null;
+  let i = 1; while (i < L.length - 1 && L[i].t < t) i++;
+  const a = L[i - 1], b = L[i], dt = b.t - a.t; if (!(dt > 0)) return null;
+  const f = Math.min(1, Math.max(0, (t - a.t) / dt)), near = f < 0.5 ? a : b;
+  return { x: a.x + (b.x - a.x) * f, y: a.y + (b.y - a.y) * f, v: Math.hypot(b.x - a.x, b.y - a.y) / dt, vx: (b.x - a.x) / dt, vy: (b.y - a.y) / dt, fuera: near.fuera, estado: near.estado };
 }
 function uiVivo() {
   const el = document.getElementById("vivo"); if (!el) return;
@@ -2492,15 +2539,19 @@ vₓ = dx/dt = ${f2(L.vx, 2)} m/s    v_y = dy/dt = ${f2(L.vy, 2)} m/s
 
 A(t) = ∫₀^x(t) y dx = F(${f2(L.x, 2)}) − F(0) = ${f2(L.A, 3)} m²
 Trapecios con ${L.n} puntos rastreados:  ${f2(L.At, 3)} m²
-Recorrido: ${f2(L.pct, 1)} % del área total (${f2(tiro.res.area, 2)} m²)`;
+Recorrido: ${f2(L.pct, 1)} % del área total (${f2(tiro.res.area, 2)} m²)` + (L.med ? `
+
+Medido en este instante (cuadro a cuadro, sin ajuste):
+x = ${f2(L.med.x, 2)} m   y = ${f2(L.med.y, 2)} m   rapidez = ${f2(L.med.v, 2)} m/s (${f2(L.med.v * 3.6, 0)} km/h)${L.med.estado && ESTADOS[L.med.estado] ? "  ·  " + ESTADOS[L.med.estado].n.toLowerCase() : ""}${L.med.fuera ? "\nfuera del tramo ajustado: aquí manda la medición directa" : ""}` : "");
 }
 function uiVideo() {
   const v = tiro.video; if (!v) return;
+  const tv = tiempoVista();
   const sl = document.getElementById("vtime"), tt = document.getElementById("vt"), pl = document.getElementById("vplay");
-  if (sl) sl.value = v.currentTime;
-  if (tt) tt.textContent = `${f2(v.currentTime, 3)} s · cuadro ${Math.round(v.currentTime * tiro.fps)}`;
+  if (sl) sl.value = tv;
+  if (tt) tt.textContent = `${f2(tv, 3)} s · cuadro ${Math.round(tv * tiro.fps)}`;
   if (pl) pl.textContent = tiro.seg.activo || !v.paused ? "❚❚ Pausa" : "▶ Reproducir";
-  document.getElementById("hud-tc").textContent = `t = ${f2(v.currentTime, 3)} s`;
+  document.getElementById("hud-tc").textContent = `t = ${f2(tv, 3)} s`;
   uiVivo(); uiRecorrido();
 }
 // Lo que el cálculo dice del tiro: ángulos con la derivada, altura en la barrera y en el arco, tiempos
@@ -2622,7 +2673,7 @@ function pasosHTML(lista, actual) {
   return `<ol class="pasos">${lista.map((t, i) => `<li class="${i < actual ? "hecho" : i === actual ? "ahora" : ""}">${t}</li>`).join("")}</ol>`;
 }
 
-function renderTiro() {
+function renderTiro(soloDer) {
   const r = tiro.res, ref = REFS[tiro.refTipo], ns = necesitaSuelo(), met = metodoEfectivo();
   const lista = ["Referencia · extremo 1", `Referencia · extremo 2 (escala = ${f2(tiro.largo)} m)`];
   if (ns) lista.push("Nivel del suelo (y = 0)");
@@ -2630,7 +2681,7 @@ function renderTiro() {
   lista.push("Parábola, área y TFC");
   const base = ns ? 3 : 2;
   const idx = tiro.calib.length < 2 ? tiro.calib.length : ns && !tiro.suelo ? 2 : r ? base + 1 : base;
-  hud(fase === "elegir" ? "<b>FOTO</b> · ¿cuál es el balón? Haz clic sobre él (el círculo 1 es el más probable)"
+  if (!soloDer) hud(fase === "elegir" ? "<b>FOTO</b> · ¿cuál es el balón? Haz clic sobre él (el círculo 1 es el más probable)"
     : fase === "calibrar" && tiro.video && tiro.modoSeg === "auto" && !tiro.calib.length ? "<b>AUTOMÁTICO</b> · ve al cuadro del disparo y pulsa «Analizar automáticamente»"
     : fase === "calibrar" ? `<b>CALIBRAR</b> · ${ref.pasos[Math.min(tiro.calib.length, 1)]}`
     : fase === "semilla" ? "<b>SEGUIMIENTO</b> · haz clic sobre el balón en este cuadro"
@@ -2641,7 +2692,7 @@ function renderTiro() {
     : fase === "marcar" ? (tiro.video ? `<b>MARCAR</b> · pausa, clic en el balón, avanza cuadros y repite (${tiro.puntos.length} marcados)` : `<b>MARCAR</b> · clic sobre el balón (${tiro.puntos.length} marcados${met === "minimos" ? ", mínimo 3" : ""})`)
     : (tiro.demo ? `<b>EJEMPLO ${ejIdx + 1}/${EJEMPLOS.length}</b> · ${tiro.jugador} · foto real de referencia` : "<b>LISTO</b> · resultados en la telemetría"));
   const metNombre = { minimos: "Mínimos cuadrados", fisica: "Modelo físico (proyectil)" }[met];
-  panelIzq.innerHTML = `
+  if (!soloDer) panelIzq.innerHTML = `
     ${volverHTML()}
     <div class="bloque"><h2>VAR · Tiro</h2><p class="aviso">Carga la foto o captura del tiro. Si no se ve el arco, calibra con el diámetro del balón o la altura del jugador; con una sola posición del balón se usa el modelo físico.</p></div>
     ${cargadorHTML()}
@@ -2726,6 +2777,7 @@ Error: ${f2(Math.abs(r.num - r.area) / Math.abs(r.area) * 100, 6)} %</div></div>
     <div class="fila"><button class="btn" id="vermet" type="button">Ver cómo se calculó →</button></div>
     <div class="fila"><button class="btn primario" id="aA" type="button">Llevar al duelo · esquina A</button><button class="btn" id="aB" type="button">Esquina B</button></div>` : `<div class="sin-res"><b>Todavía no hay resultado</b><span>${tiro.calib.length < 2 ? `Falta calibrar la escala: ${2 - tiro.calib.length} clic${tiro.calib.length ? "" : "s"} sobre la referencia.` : ns && !tiro.suelo ? "Falta marcar el nivel del suelo (un clic en el césped)." : met === "minimos" ? `Faltan ${Math.max(0, 3 - tiro.puntos.length)} posiciones del balón (o cambia a modelo físico).` : "Marca al menos una posición del balón."} Los números aparecen aquí apenas se complete.</span></div>`}
     <p class="aviso">La foto es una proyección: el cálculo es fiel cuando la cámara mira el tiro de lado. En tomas en diagonal el resultado es aproximado.</p>`;
+  if (!soloDer) {
   enlazarCargador(tiro, i => { cargarEjemplo(i); recalcular(); });
   const num = (id, fn) => { const el = document.getElementById(id); if (el) el.onchange = e => { const v = parseFloat(String(e.target.value).replace(",", ".")); if (Number.isFinite(v) && v >= 0) { fn(v); recalcular(); } }; };
   document.getElementById("jug").oninput = e => { tiro.jugador = e.target.value; };
@@ -2758,6 +2810,7 @@ Error: ${f2(Math.abs(r.num - r.area) / Math.abs(r.area) * 100, 6)} %</div></div>
   }
   document.querySelectorAll("[data-prop]").forEach(b => b.onclick = () => usarPropuesta(tiro.propuestas[+b.dataset.prop]));
   const rd = document.getElementById("redetectar"); if (rd) rd.onclick = () => analizarFoto();
+  } else if (tiro.video) uiVideo();
   if (r) {
     const llevar = k => { duelo[k] = { nombre: tiro.jugador || (k === "A" ? "Jugador A" : "Jugador B"), c: [...r.c], d: r.d, fuente: "imagen" }; modo = "duelo"; marcarModo(); mostrar(); };
     document.getElementById("aA").onclick = () => llevar("A");
