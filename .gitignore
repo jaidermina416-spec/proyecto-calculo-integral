@@ -1,0 +1,6 @@
+*.bak
+*.bak2
+*.bak3
+VAR-TIRO_proyecto.zip
+.claude/settings.local.json
+__pycache__/
