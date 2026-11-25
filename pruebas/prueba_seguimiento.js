@@ -1,7 +1,7 @@
 // Prueba automática del seguimiento: genera un video sintético con física conocida,
 // lo carga en la página, calibra con el poste, siembra el balón y mide el resultado.
 // Uso: pegar en la consola de pagina_interactiva.html y ejecutar  await probar({ fluido: true })
-window.probar = async function ({ fluido = true, vx0 = 7, vy0 = 6.5, y0 = 0.2, rate = 0.5, ruido = 0, rb = 11, calibrar = true, tIni = 0.1, pan = 0, zoom = 0, color = "#fff", cesped = true } = {}) {
+window.probar = async function ({ clicDirecto = false, fluido = true, vx0 = 7, vy0 = 6.5, y0 = 0.2, rate = 0.5, ruido = 0, rb = 11, calibrar = true, tIni = 0.1, pan = 0, zoom = 0, color = "#fff", cesped = true } = {}) {
   const W = 1280, H = 720, suelo = 650, k = 100, T = 1.4;
   const cv = document.createElement("canvas"); cv.width = W; cv.height = H; const gx = cv.getContext("2d");
   const fondo = document.createElement("canvas"); fondo.width = W; fondo.height = H; const fg = fondo.getContext("2d");
@@ -43,13 +43,19 @@ window.probar = async function ({ fluido = true, vx0 = 7, vy0 = 6.5, y0 = 0.2, r
   await seekA(tiro.video, tIni);
   tiro.seg.rate = rate;
   if (!fluido) { const orig = HTMLVideoElement.prototype.requestVideoFrameCallback; delete HTMLVideoElement.prototype.requestVideoFrameCallback; setTimeout(() => { if (orig) HTMLVideoElement.prototype.requestVideoFrameCallback = orig; }, 100); }
-  tiro.modoSeg = "auto"; render();
-  document.getElementById("vseg").click();
-  // el modo automático busca el balón (asíncrono); si no está seguro, pide un clic sobre él
-  for (let i = 0; i < 150 && !tiro.seg.activo && fase !== "semilla"; i++) await new Promise(r => setTimeout(r, 100));
-  if (fase === "semilla" && !tiro.seg.activo) { const b = bola(); semillaManual = true; clic(b.x, b.y); }
+  tiro.modoSeg = "auto";
+  // versiones con intervalo de análisis: se empieza en el mismo cuadro que antes (tIni), para comparar igual con igual
+  if ("rango" in tiro) tiro.rango = { a: tIni, b: tiro.video.duration };
+  render();
+  // clicDirecto: se siembra con un clic sobre la posición exacta del balón (igual en todas las versiones): compara solo el seguimiento
+  if (clicDirecto) { fase = "semilla"; const b = bola(); semillaManual = true; clic(b.x, b.y); }
+  else document.getElementById("vseg").click();
+  // el modo automático busca el balón (asíncrono; puede avanzar por el video buscándolo); si no está seguro, pide un clic sobre él
+  for (let i = 0; i < 300 && !tiro.seg.activo && fase !== "semilla"; i++) await new Promise(r => setTimeout(r, 100));
+  // con clicDirecto la siembra ya está en marcha (es asíncrona): no se vuelve a hacer clic
+  if (!clicDirecto && fase === "semilla" && !tiro.seg.activo) { const b = bola(); semillaManual = true; clic(b.x, b.y); }
   for (let i = 0; i < 50 && !tiro.seg.activo; i++) await new Promise(r => setTimeout(r, 100));
-  for (let i = 0; i < 60 && tiro.seg.activo; i++) await new Promise(r => setTimeout(r, 500));
+  for (let i = 0; i < 240 && (tiro.seg.activo || tiro.seg.buscando); i++) await new Promise(r => setTimeout(r, 500));
   const r = tiro.res;
   const tAt = (-vy0 - Math.sqrt(vy0 * vy0 + 4 * 4.905 * y0)) / (-2 * 4.905), dReal = vx0 * tAt;
   const aReal = (() => { const a = -4.905 / vx0 ** 2, bb = vy0 / vx0; return a * dReal ** 3 / 3 + bb * dReal ** 2 / 2 + y0 * dReal; })();

@@ -22,8 +22,8 @@ class Manejador(http.server.SimpleHTTPRequestHandler):
 
 with Servidor(("", PUERTO), Manejador) as servidor:
     url = f"http://localhost:{PUERTO}/{PAGINA}"
-    print(f"Servidor activo en {url}")
     print("Presiona Ctrl + C para detenerlo")
+    print(f"Servidor activo en {url}")
     threading.Timer(1.0, lambda: webbrowser.open(url)).start()
     try:
         servidor.serve_forever()

@@ -1,0 +1,56 @@
+VAR · TIRO — Proyecto de Aula de Cálculo Integral
+Integrales definidas e indefinidas, Teorema Fundamental del Cálculo, áreas y volúmenes
+Universidad Simón Bolívar · Ingeniería de Datos e Inteligencia Artificial
+
+CONTENIDO
+  Informe_Final_Proyecto_Aula_VAR-TIRO.docx / .pdf   Informe final en normas APA 7.
+  pagina_interactiva.html                            Simulador web VAR · TIRO.
+  servidor.py                                        Abre el simulador en el navegador.
+  calculo_balones_y_tiros.py                         Script de verificación en Python.
+  VAR-TIRO_video.mp4                                 Video de presentación (20 s).
+  figuras/                                           Gráficas del script y del informe.
+  img/                                               Imágenes que usa el simulador.
+  imagenes prueba/                                   Fotos para probar el simulador.
+  videos prueba/sinteticos/                          Videos de prueba con física conocida (+ verdad en JSON).
+  pruebas/                                           Pruebas automáticas del seguimiento (ver pruebas/README.md).
+
+CÓMO ABRIR EL SIMULADOR
+  1. Instale Python 3 si no lo tiene.
+  2. En esta carpeta, ejecute:   python servidor.py
+  3. Se abre el navegador en http://localhost:8000/pagina_interactiva.html
+     (si no se abre, copie esa dirección en Chrome o Edge).
+  4. Para detener el servidor, presione Ctrl + C en la consola.
+  El simulador necesita conexión a internet: carga Plotly, KaTeX y las fuentes
+  desde la red. Use Chrome o Edge para analizar videos.
+
+ANALIZAR UN VIDEO
+  1. Análisis → «Cargar imagen o video» y elija un MP4 (H.264) o WebM.
+  2. Pulse «Analizar el video completo». Se recorre el video desde el primer
+     cuadro: si el balón aparece tarde o se pierde, el análisis sigue y esos
+     cuadros quedan en rojo («sin detección») en la línea de tiempo bajo el
+     video. Nunca se inventan posiciones. Con «Desde/Hasta este cuadro» se
+     puede recortar el intervalo.
+  3. El video se ve limpio; la trayectoria, el área y los cálculos van en el
+     plano y en el panel de resultados, sincronizados con el tiempo del video.
+  4. En «Revisión de posiciones» se elige el tramo del vuelo que entra al
+     ajuste, se ven las posiciones dudosas (Ver / Corregir / Excluir), se
+     comparan los resultados con y sin ellas, y se puede deshacer cada cambio.
+     El archivo de video nunca se modifica.
+  5. «Calidad de la medición» y «Supuestos y limitaciones» explican cuánto
+     confiar en el número. Con una sola cámara no se recupera la profundidad:
+     los resultados son aproximados.
+  Para probar: la carpeta «videos prueba/sinteticos» trae cuatro videos con la
+  física conocida (balón que aparece tarde, balón tapado por un jugador).
+
+CÓMO EJECUTAR EL SCRIPT DE PYTHON
+  pip install numpy scipy matplotlib
+  python calculo_balones_y_tiros.py
+  Imprime cada integral calculada con el TFC y con SciPy, y guarda las gráficas
+  en la carpeta figuras/.
+
+RESULTADOS PRINCIPALES (iguales en el informe, el script y el simulador)
+  Área bajo el tiro libre de Messi (2019):   65,02 m²
+  Altura máxima / velocidad horizontal:      3,16 m / 81 km/h
+  Área bajo la chilena de Cristiano (2018):  19,11 m²
+  Área entre las dos trayectorias:           12,98 m²
+  Volumen del balón de fútbol:               5 547,49 cm³
