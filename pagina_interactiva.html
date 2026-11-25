@@ -1187,9 +1187,14 @@ const dtCuadro = () => 1 / (tiro.fps || 30);
 // Estado de cada cuadro analizado: "ok" (balón visto), "dudoso", "sin" (sin detección), "corte" (cambio de toma).
 // Nunca se inventan posiciones: un cuadro sin balón solo queda marcado así.
 function marcarLinea(t, e) {
-  const L = tiro.linea, u = L[L.length - 1];
-  if (u && Math.abs(u.t - t) < 0.4 * dtCuadro()) { if (u.e !== "ok" || e === "ok" || e === "dudoso") u.e = e; return; }
-  if (u && t < u.t) { const i = L.findIndex(q => q.t > t); L.splice(i, 0, { t, e }); return; }
+  const L = tiro.linea, u = L[L.length - 1], tol = 0.4 * dtCuadro();
+  const poner = q => { if (q.e !== "ok" || e === "ok" || e === "dudoso") q.e = e; };
+  if (u && Math.abs(u.t - t) < tol) { poner(u); return; }
+  if (u && t < u.t) {
+    const i = L.findIndex(q => q.t > t - tol);
+    if (i >= 0 && Math.abs(L[i].t - t) < tol) { poner(L[i]); return; }
+    L.splice(i, 0, { t, e }); return;
+  }
   L.push({ t, e });
 }
 // Intervalos seguidos sin ver el balón (incluye los cambios de toma), en segundos del video
@@ -2086,7 +2091,10 @@ function grisCuadro(S, tRef, usarVF = true) {
   g.drawImage(src, 0, 0, w, h);
   // gris en enteros sobre la vista de 32 bits: ~3× más rápido que en coma flotante (cuenta en cada cuadro)
   const u = new Uint32Array(g.getImageData(0, 0, w, h).data.buffer), a = new Uint8Array(w * h);
-  for (let i = 0; i < a.length; i++) { const p = u[i]; a[i] = ((p & 255) * 77 + ((p >>> 8) & 255) * 150 + ((p >>> 16) & 255) * 29) >> 8; }
+  // balón oscuro: se usa el canal de valor (el mayor de R, G y B). El césped y el azul del público son colores intensos aunque se vean
+  // oscuros en gris; en valor quedan mucho más claros que un balón negro (en gris un balón negro sobre azul apenas contrasta)
+  if (S.canal === "valor") for (let i = 0; i < a.length; i++) { const p = u[i], r = p & 255, g = (p >>> 8) & 255, b = (p >>> 16) & 255; a[i] = r > g ? (r > b ? r : b) : (g > b ? g : b); }
+  else for (let i = 0; i < a.length; i++) { const p = u[i]; a[i] = ((p & 255) * 77 + ((p >>> 8) & 255) * 150 + ((p >>> 16) & 255) * 29) >> 8; }
   copiarMonitor(S, v, src, t);
   if (vf) vf.close();
   return { a, w, h, t };
@@ -2143,14 +2151,24 @@ function buscar(G, S, primero, amplio) {
   return { x: bx + sx, y: by + sy, xi: bx, yi: by, score: best / n, dm: mgB - mt, borde: bx - R <= 1 || by - R <= 1 || bx + R >= G.w - 2 || by + R >= G.h - 2 };
 }
 // Afina el centro con el centroide del brillo: el balón es la mancha clara, así la plantilla no "resbala" del centro
+// Tono del balón frente a su entorno: centro menos anillo (negativo = balón más oscuro que lo que lo rodea)
+function tonoBalon(G, cx, cy, R) {
+  let c = 0, nc = 0, a = 0, na = 0; cx = Math.round(cx); cy = Math.round(cy);
+  for (let dy = -2 * R; dy <= 2 * R; dy++) for (let dx = -2 * R; dx <= 2 * R; dx++) { const x = cx + dx, y = cy + dy; if (x < 0 || y < 0 || x >= G.w || y >= G.h) continue; const d = Math.hypot(dx, dy), v = G.a[y * G.w + x]; if (d <= 0.6 * R) { c += v; nc++; } else if (d > 1.25 * R && d <= 2 * R) { a += v; na++; } }
+  return nc && na ? c / nc - a / na : 0;
+}
 function refinarCentro(G, res, R) {
   let pico = 0, valle = 255, anillo = 0, na = 0;
   for (let dy = -R; dy <= R; dy++) for (let dx = -R; dx <= R; dx++) { const x = res.xi + dx, y = res.yi + dy; if (x < 0 || y < 0 || x >= G.w || y >= G.h) continue; const val = G.a[y * G.w + x]; if (Math.hypot(dx, dy) <= Math.max(1.5, R * 0.6)) { pico = Math.max(pico, val); valle = Math.min(valle, val); } else { anillo += val; na++; } }
   // el balón puede ser más claro (lo habitual) o más oscuro que su entorno: el contraste se mide en valor absoluto
-  const fondo = na ? anillo / na : 0, claro = pico - fondo, oscuro = fondo - valle; res.contraste = Math.max(claro, oscuro);
-  if (res.contraste < 20 || oscuro > claro) return res;
-  const thr = fondo + 0.5 * res.contraste, Rr = R + 1; let sw = 0, sx = 0, sy = 0;
-  for (let dy = -Rr; dy <= Rr; dy++) for (let dx = -Rr; dx <= Rr; dx++) { if (dx * dx + dy * dy > Rr * Rr) continue; const x = res.xi + dx, y = res.yi + dy; if (x < 0 || y < 0 || x >= G.w || y >= G.h) continue; const val = G.a[y * G.w + x]; if (val > thr) { const w = val - thr; sw += w; sx += w * x; sy += w * y; } }
+  const fondo = na ? anillo / na : 0, claro = pico - fondo, oscuro = fondo - valle; res.contraste = Math.max(claro, oscuro); res.claroC = claro; res.oscuroC = oscuro;
+  if (res.contraste < 20) return res;
+  // balón claro: centroide de lo que supera el umbral (como siempre). Balón seguido como oscuro: centroide de lo que queda por
+  // debajo, aunque tenga franjas claras (no se deja arrastrar hacia ellas)
+  const os = !!tiro.seg.oscuro; if (!os && oscuro > claro) return res;
+  const cc = os ? oscuro : claro; if (cc < 12) return res;
+  const thr = os ? fondo - 0.5 * cc : fondo + 0.5 * cc, Rr = R + 1; let sw = 0, sx = 0, sy = 0;
+  for (let dy = -Rr; dy <= Rr; dy++) for (let dx = -Rr; dx <= Rr; dx++) { if (dx * dx + dy * dy > Rr * Rr) continue; const x = res.xi + dx, y = res.yi + dy; if (x < 0 || y < 0 || x >= G.w || y >= G.h) continue; const val = G.a[y * G.w + x], w = os ? thr - val : val - thr; if (w > 0) { sw += w; sx += w * x; sy += w * y; } }
   if (sw > 0) { const cx = sx / sw, cy = sy / sw; if (Math.hypot(cx - res.x, cy - res.y) <= 0.75 * R + 0.5) { res.x = cx; res.y = cy; } }
   return res;
 }
@@ -2203,8 +2221,12 @@ function sembrar(p) {
   if (tiro.modoSeg === "auto" && !tiro.cam.length) tiro.cam.push({ t: v.currentTime, x: 0, y: 0, z: 1 });
   S.C = camAt(v.currentTime);
   prepararSeg();
-  const G = grisCuadro(S, v.currentTime, false);
+  S.canal = "gris";
+  let G = grisCuadro(S, v.currentTime, false);
   S.pos = { x: p.x * S.k, y: p.y * S.k };
+  S.tonoTpl = tonoBalon(G, S.pos.x, S.pos.y, S.R); S.oscuro = S.tonoTpl < -8;
+  // balón más oscuro que su entorno: el seguimiento pasa al canal de valor, donde se distingue mejor del fondo
+  if (S.oscuro) { S.canal = "valor"; G = grisCuadro(S, v.currentTime, false); S.tonoTpl = Math.min(S.tonoTpl, tonoBalon(G, S.pos.x, S.pos.y, S.R)); log("seg", "Balón oscuro", `más oscuro que su entorno: se sigue en el canal de valor (contraste ${Math.round(-S.tonoTpl)} niveles), se afina su centro por la zona oscura y, si se pierde, se busca una mancha oscura`); }
   S.tpl = recorte(G, S.pos.x, S.pos.y, S.R); fijarUmbral(S);
   S.camPrev = G; S.camPred = null;
   S.vel = { x: 0, y: 0 }; S.tPrev = v.currentTime; S.primero = true; S.fallos = 0; S.pred = null; S.yMax = 0; S.quieto = 0; S.msg = ""; S.prevG = G; S.repetidos = 0; S.ultimoLog = 0;
@@ -2380,9 +2402,18 @@ function procesarCuadro(t, G0) {
   if (auto && res.score <= S.umbral && res.contraste < 14) res.score = S.umbral + 1;
   // la forma coincide pero el brillo no: es otra cosa con un borde parecido (un jugador o un objeto que tapa el balón)
   if (auto && res.score <= S.umbral && Math.abs(res.dm || 0) > 55) { res.score = S.umbral + 1; res.tapado = true; }
+  // balón oscuro: una plantilla de poco contraste también «coincide» con fondo liso; el lugar elegido tiene que ser más oscuro que su entorno
+  if (auto && S.oscuro && res.score <= S.umbral && tonoBalon(G, res.x, res.y, S.R) > Math.min(-8, 0.5 * S.tonoTpl)) res.score = S.umbral + 1;
+  // balón oscuro (plantilla de poco contraste): una coincidencia que contradice la parábola de las últimas posiciones del vuelo
+  // (con 5 o más) se trata como cuadro dudoso. En balones claros no se aplica: con cámara en movimiento o balones de pocos
+  // píxeles la parábola extrapolada no es tan fiable y la plantilla clara ya distingue bien el balón.
+  if (auto && S.oscuro && res.score <= S.umbral && !S.primero && !S.enReposo && !S.post && !S.corte && S.mov !== "quieto") {
+    const vuelo = tiro.puntos.filter(q => q.auto && !q.fuera && !q.atipico && q.t != null && q.estado !== "quieto").length, ex = vuelo >= 5 ? extrapolar(t) : null;
+    if (ex) { const ep = { x: (S.C.z * ex.x + S.C.x) * S.k, y: (S.C.z * ex.y + S.C.y) * S.k }, paso = Math.hypot(S.vel.x, S.vel.y) / tiro.fps; if (Math.hypot(res.x - ep.x, res.y - ep.y) > Math.max(2.5 * S.R, 6, 0.8 * paso)) { res.score = S.umbral + 1; res.fueraTray = true; } }
+  }
   if (res.score > S.umbral && (S.fallos || 0) < 3) {
     S.fallos = (S.fallos || 0) + 1;
-    log("aviso", "Cuadro dudoso omitido", `t ${f2(t, 3)} s · ${res.tapado ? "el brillo no coincide con el balón (¿tapado?)" : "poca coincidencia"} · sin posición en este cuadro (${S.fallos}/3)`);
+    log("aviso", "Cuadro dudoso omitido", `t ${f2(t, 3)} s · ${res.tapado ? "el brillo no coincide con el balón (¿tapado?)" : res.fueraTray ? "coincidencia débil y lejos de la trayectoria prevista (¿tapado?)" : "poca coincidencia"} · sin posición en este cuadro (${S.fallos}/3)`);
     marcarLinea(t, "sin");
     return "repetido";
   }
@@ -2469,7 +2500,9 @@ function procesarCuadro(t, G0) {
 // Posición prevista (px de video, coordenadas del mundo) en el instante t con los últimos puntos del vuelo:
 // x(t), y(t) cuadráticas por mínimos cuadrados (lineales si hay pocos puntos)
 function extrapolar(t) {
-  const P = tiro.puntos.filter(q => q.auto && !q.fuera && !q.atipico && q.t != null).slice(-10);
+  // el balón quieto antes del disparo no es parte de la parábola del vuelo: con 3 posiciones en movimiento o más, se deja fuera
+  const T0 = tiro.puntos.filter(q => q.auto && !q.fuera && !q.atipico && q.t != null), M0 = T0.filter(q => q.estado !== "quieto");
+  const P = (M0.length >= 3 ? M0 : T0).slice(-10);
   if (P.length < 3) return null;
   const tu = P[P.length - 1].t, f = q => { const u = q.t - tu; return P.length >= 5 ? [u * u, u, 1] : [u, 1]; };
   const cx = minimos(P.map(f), P.map(q => q.x)), cy = minimos(P.map(f), P.map(q => q.y));
@@ -2487,7 +2520,7 @@ function reencontrar(G, t) {
   const ex = S.corte ? null : extrapolar(t), centro = ex ? { x: S.C.z * ex.x + S.C.x, y: S.C.z * ex.y + S.C.y } : { x: S.pred.x / S.k, y: S.pred.y / S.k };
   const vpf = Math.hypot(S.vel.x, S.vel.y) / S.k / tiro.fps, rad = Math.min(Math.max(v.videoWidth, v.videoHeight) * 0.45, 4 * rBal + 30 + Math.max(12, 1.5 * vpf, 0.03 * v.videoWidth) * S.perdido);
   // se busca sobre el cuadro ya leído (S.cnv, a escala S.k): así el video oculto puede ir decodificando el siguiente
-  const k = S.k, cands = detectarBalon(S.cnv, null, true, S.corte ? { relajado: true } : { relajado: true, zona: { x: centro.x * k, y: centro.y * k, r: rad * k } })
+  const k = S.k, cands = detectarBalon(S.cnv, null, true, S.corte ? { relajado: true, oscuro: S.oscuro } : { relajado: true, oscuro: S.oscuro, zona: { x: centro.x * k, y: centro.y * k, r: rad * k } })
     .map(c => ({ ...c, x: c.x / k, y: c.y / k, r: c.r / k }))
     .filter(c => !fijos.some(q => Math.hypot(q.x - c.x, q.y - c.y) < 4) && c.r < 2.5 * rBal + 2 && c.r > rBal / 2.5 - 1)
     .map(c => ({ ...c, dist: Math.hypot(c.x - centro.x, c.y - centro.y) }))
@@ -2535,13 +2568,15 @@ function detectarBalon(v, cerca, todos, op = {}) {
   const d = g.getImageData(0, 0, w, h).data, bl = new Float32Array(N);
   // brillo (sirve para balones blancos, amarillos o naranjas) y "césped" (verde dominante)
   const cesped = new Uint8Array(N);
-  for (let i = 0, j = 0; i < N; i++, j += 4) { const R = d[j], Gc = d[j + 1], Bc = d[j + 2]; bl[i] = 0.299 * R + 0.587 * Gc + 0.114 * Bc; cesped[i] = Gc > R + 6 && Gc > Bc + 6 && bl[i] < 185 ? 1 : 0; }
+  const inv = !!op.oscuro;
+  for (let i = 0, j = 0; i < N; i++, j += 4) { const R = d[j], Gc = d[j + 1], Bc = d[j + 2], lum = 0.299 * R + 0.587 * Gc + 0.114 * Bc; bl[i] = inv ? 255 - Math.max(R, Gc, Bc) : lum; cesped[i] = Gc > R + 6 && Gc > Bc + 6 && lum < 185 ? 1 : 0; }
   const W1 = w + 1, sat = new Float64Array(W1 * (h + 1));
   for (let y = 0; y < h; y++) { let f = 0; for (let x = 0; x < w; x++) { f += bl[y * w + x]; sat[(y + 1) * W1 + x + 1] = sat[y * W1 + x + 1] + f; } }
   const rb0 = Math.max(4, Math.round(VW * kd / 120)), mediaR = (x, y, rb) => { const x0 = Math.max(0, x - rb), y0 = Math.max(0, y - rb), x1 = Math.min(w, x + rb + 1), y1 = Math.min(h, y + rb + 1); return (sat[y1 * W1 + x1] - sat[y0 * W1 + x1] - sat[y1 * W1 + x0] + sat[y0 * W1 + x0]) / ((x1 - x0) * (y1 - y0)); };
   // en una foto el balón puede ser grande: el contraste se mide contra el entorno a 3 escalas y se queda el mayor
   const escalas = foto ? [rb0, 3 * rb0, 7 * rb0] : [rb0], media = (x, y) => { let m = Infinity; for (const rb of escalas) m = Math.min(m, mediaR(x, y, rb)); return m; };
-  const mask = new Uint8Array(N), con = new Float32Array(N), cMin = relajado ? 22 : 28, bMin = relajado ? 110 : 120;
+  // un balón oscuro suele contrastar menos que uno claro: al recuperarlo (búsqueda acotada cerca de la trayectoria) se pide menos contraste
+  const mask = new Uint8Array(N), con = new Float32Array(N), cMin = inv && relajado ? 18 : relajado ? 22 : 28, bMin = relajado ? 110 : 120;
   for (let y = 1; y < h - 1; y++) for (let x = 1; x < w - 1; x++) { const i = y * w + x; if (bl[i] <= bMin || cesped[i]) continue; const c = bl[i] - media(x, y); if (c > cMin) { mask[i] = 1; con[i] = c; } }
   const vis = new Uint8Array(N), cands = [], pila = [];
   for (let i0 = 0; i0 < N; i0++) {
@@ -2863,11 +2898,13 @@ async function sembrarDesdeClicIn(p) {
   const a = await videoAnalisis(); await overlaysVideo(a);
   if (tiro.img === tiro.video && Math.abs(a.currentTime - tiro.video.currentTime) > 1e-3) await seekA(a, tiro.video.currentTime);
   if (tiro.modoSeg === "auto" && !retoma) {
-    let det = detectarBalon(a, p) || { x: p.x, y: p.y, r: tiro.calib.length === 2 ? radioBalonVideo() : 6 };
+    let det = detectarBalon(a, p) || detectarBalon(a, p, false, { oscuro: true }) || { x: p.x, y: p.y, r: tiro.calib.length === 2 ? radioBalonVideo() : 6 };
     // ¿el balón señalado ya va en el aire? entonces se arranca con su velocidad y sus dos posiciones anteriores
     const dv = await detectarEnVuelo(a, a.currentTime);
     if (dv && Math.hypot(dv.x - det.x, dv.y - det.y) < 3 * Math.max(det.r, dv.r) + 6) { det = dv; log("seg", "Balón en vuelo", `el balón señalado se mueve ${f2(dv.vpx, 1)} px por cuadro: se suman sus 2 posiciones anteriores`); }
     log("seg", "Balón indicado con clic", `(${Math.round(det.x)}; ${Math.round(det.y)}) px · diámetro ${f2(2 * det.r, 1)} px`);
+    // las marcas «sin detección» de una búsqueda anterior desde este cuadro en adelante eran provisionales: el seguimiento vuelve a analizarlos
+    const tc = a.currentTime - 0.4 * dtCuadro(); tiro.linea = tiro.linea.filter(q => q.t < tc);
     return arrancarAuto(det);
   }
   sembrar(p);

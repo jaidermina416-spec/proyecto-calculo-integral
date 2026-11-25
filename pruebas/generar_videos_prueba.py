@@ -28,6 +28,8 @@ CASOS = {
     "tapado": dict(dur=3.0, aparece=0.0, disparo=0.5, tapado=(0.95, 1.20)),
     # las dos cosas: aparece tarde y luego queda tapado un momento
     "tarde_y_tapado": dict(dur=3.6, aparece=0.7, disparo=1.1, tapado=(1.55, 1.80)),
+    # balón negro con una franja gris (más oscuro que el fondo): se pierde tras el jugador y hay que recuperarlo
+    "oscuro_tapado": dict(dur=3.0, aparece=0.0, disparo=0.5, tapado=(0.95, 1.20), color=(22, 22, 24), mancha=(120, 120, 120)),
 }
 
 
@@ -67,7 +69,7 @@ def fondo():
     return im
 
 
-def generar(nombre, dur, aparece, disparo, tapado=None, carpeta=Path("videos prueba/sinteticos")):
+def generar(nombre, dur, aparece, disparo, tapado=None, color=(255, 255, 255), mancha=(34, 34, 34), carpeta=Path("videos prueba/sinteticos")):
     carpeta.mkdir(parents=True, exist_ok=True)
     base = fondo()
     caja = None
@@ -87,8 +89,8 @@ def generar(nombre, dur, aparece, disparo, tapado=None, carpeta=Path("videos pru
         x, y = posicion(t - disparo)
         presente = t >= aparece - 1e-9
         if presente:
-            g.ellipse([x - RB, y - RB, x + RB, y + RB], fill=(255, 255, 255))
-            g.ellipse([x - 7, y - 6, x + 1, y + 2], fill=(34, 34, 34))
+            g.ellipse([x - RB, y - RB, x + RB, y + RB], fill=color)
+            g.ellipse([x - 7, y - 6, x + 1, y + 2], fill=mancha)
         tapa = False
         if caja:
             g.rectangle(caja, fill=(58, 42, 26))
@@ -99,7 +101,7 @@ def generar(nombre, dur, aparece, disparo, tapado=None, carpeta=Path("videos pru
     w.close()
     area, d = area_real()
     info = {"video": ruta.name, "fps": FPS, "duracion": n / FPS, "aparece": aparece, "disparo": disparo, "tapado": tapado,
-            "escala_px_por_m": K, "radio_px": RB, "area_real_m2": round(area, 4), "alcance_m": round(d, 4), "cuadros": verdad}
+            "escala_px_por_m": K, "radio_px": RB, "color": list(color), "area_real_m2": round(area, 4), "alcance_m": round(d, 4), "cuadros": verdad}
     (carpeta / f"prueba_{nombre}.json").write_text(json.dumps(info, ensure_ascii=False), encoding="utf-8")
     print(f"{ruta}  {n} cuadros  {ruta.stat().st_size / 1e3:.0f} kB  área real {area:.3f} m²")
 
