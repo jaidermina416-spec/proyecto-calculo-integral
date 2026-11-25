@@ -113,6 +113,7 @@ body.plano-amplio::after { content: ""; position: fixed; inset: 0; z-index: 59; 
   .plano-ley .ayuda { display: none; }
   .plano .plano-mini { top: 96px; width: 36%; }
   .sala .centro.con-linea .plano { height: 440px; }
+  .sala .centro.con-linea .plano.con-sel { height: 610px; }
 }
 
 /* Revisión de posiciones, calidad y supuestos */
@@ -1914,6 +1915,9 @@ function uiPlano(S, orden = [], sinI = [], sel = null) {
     }
     ficha.hidden = false;
   }
+  // con la ficha abierta el plano crece (en móvil) para que la gráfica no pierda alto; se redibuja con el tamaño nuevo
+  const conSel = !ficha.hidden;
+  if (wrap.classList.contains("con-sel") !== conSel) { wrap.classList.toggle("con-sel", conSel); requestAnimationFrame(dibujarPlano); }
   // miniatura del cuadro actual en la vista ampliada
   const mini = document.getElementById("plano-mini"), amplio = wrap.classList.contains("amplio"), im = tiro.img;
   mini.hidden = !(amplio && tiro.video);
