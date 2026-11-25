@@ -4,3 +4,10 @@
 VAR-TIRO_proyecto.zip
 .claude/settings.local.json
 __pycache__/
+.claude/skills/
+.agents/
+.hallmark/
+~$*
+*.tmp
+# videos de prueba generados (se rehacen con: python pruebas/generar_videos_prueba.py)
+videos prueba/sinteticos/
