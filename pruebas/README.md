@@ -13,6 +13,7 @@ con la posición real del balón en cada cuadro y si se ve o no:
 | `prueba_aparece_tarde.mp4` | cancha vacía hasta 0,8 s; el balón aparece tarde |
 | `prueba_tapado.mp4` | un jugador fijo tapa el balón en pleno vuelo (0,95–1,20 s) |
 | `prueba_tarde_y_tapado.mp4` | las dos cosas a la vez |
+| `prueba_oscuro_tapado.mp4` | balón negro (más oscuro que el fondo) tapado en pleno vuelo: la página no lo encuentra sola y la prueba lo indica con un clic, como lo haría el usuario |
 
     python pruebas/generar_videos_prueba.py        # escribe en "videos prueba/sinteticos/" (pip install numpy pillow imageio-ffmpeg)
     node pruebas/prueba_video_completo.js          # o solo algunos: node pruebas/prueba_video_completo.js tapado
