@@ -32,6 +32,10 @@ ANALIZAR UN VIDEO
      puede recortar el intervalo.
   3. El video se ve limpio; la trayectoria, el área y los cálculos van en el
      plano y en el panel de resultados, sincronizados con el tiempo del video.
+     En el plano: rueda del ratón (o pellizco) para acercar, arrastrar para
+     moverse, clic en un punto para llevar el video a su cuadro, «Problemas»
+     para recorrer los puntos dudosos y los cuadros sin detección, y
+     «Ampliar» para verlo a pantalla completa. Mover el plano no cambia datos.
   4. En «Revisión de posiciones» se elige el tramo del vuelo que entra al
      ajuste, se ven las posiciones dudosas (Ver / Corregir / Excluir), se
      comparan los resultados con y sin ellas, y se puede deshacer cada cambio.
